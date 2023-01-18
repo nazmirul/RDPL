@@ -1,0 +1,496 @@
+
+Imports System
+Imports System.Security.Principal
+Imports System.Security.Principal.IdentityReferenceCollection
+Imports System.DirectoryServices
+Imports System.Text.RegularExpressions
+Imports System.Windows.Forms
+
+Public Class RDPLauncher_Form
+
+    Structure RDPDetails
+        Dim PN As String
+        Dim UN As String
+        Dim PW As String
+        Dim IP As String
+        Dim Res As String
+        Dim WW As Boolean
+        Dim Ecv As Boolean
+    End Structure
+
+
+    Dim RDP As RDPDetails
+    Dim ConnectionSel As Boolean
+    Dim Domain As String
+
+    Private Sub ClearConnectionList()
+        'Clear old connection list based on number of existing entries
+        For i = Connectionlist_ListView.Items.Count - 1 To 0 Step -1
+            Dim itemremove As ListViewItem
+            itemremove = Connectionlist_ListView.Items(i)
+            itemremove.Remove()
+        Next
+        ConnectionSel = False
+    End Sub
+
+    Sub RouterPing(ByVal IP As String)
+        Try
+            Call Test(IP)
+        Catch ex As Exception
+            MsgBox("Ping test was running, " + Environment.NewLine + "Kindly slow down when make change on selection/check Network!", MsgBoxStyle.Exclamation, "Ping Test Error")
+            Call Test(IP)
+        End Try
+    End Sub
+
+    Private Sub PlantType_ComboBox_SelectionChangeCommitted(sender As Object, e As EventArgs) Handles PlantType_ComboBox.SelectionChangeCommitted
+
+        'After Selected Plant Type, Update PlantList
+        ComboSel(1) = PlantType_ComboBox.SelectedValue.ToString
+        ds2.Clear()
+        Call ClearConnectionList()
+        Call SQLGetDSList(4, 4, True, ds2)
+        PlantName_ComboBox.DataSource = ds2.Tables(TablesNames(4))
+        PlantName_ComboBox.ValueMember = ""
+        PlantName_ComboBox.ValueMember = "Plant Name"
+    End Sub
+    Private Sub Station_ComboBox_SelectionChangeCommitted(sender As Object, e As EventArgs) Handles Station_ComboBox.SelectionChangeCommitted
+        'After Selected Default Station Update PlantList
+        Dim TestTest As Integer = Station_ComboBox.SelectedIndex
+        ComboSel(2) = Station_ComboBox.SelectedIndex.ToString
+        ds2.Clear()
+        Call ClearConnectionList()
+        Call SQLGetDSList(4, 4, True, ds2)
+        PlantName_ComboBox.DataSource = ds2.Tables(TablesNames(4))
+        PlantName_ComboBox.ValueMember = ""
+        PlantName_ComboBox.ValueMember = "Plant Name"
+    End Sub
+    Private Sub PlantName_ComboBox_SelectedValueChanged(sender As Object, e As EventArgs) Handles PlantName_ComboBox.SelectedValueChanged
+        ' Changed to selected value changed to auto select first field
+        If IsNothing(PlantName_ComboBox.SelectedValue) = False And StationUser = True Then
+            If PlantName_ComboBox.SelectedValue.ToString <> "[System.Data.DataRowView]" And PlantName_ComboBox.SelectedValue.ToString <> "System.Data.DataRowView" Then
+                'After recording new Combo Value, clear connection list followed by recreating new list
+                ComboSel(3) = PlantName_ComboBox.SelectedValue.ToString()
+                'Clease old database 
+                ds3.Clear()
+                Call ClearConnectionList()
+                'Get new database
+                Call SQLGetConnectionList(4, 4, False, ds3, "ConnectionList")
+                'populate connection list if its not a WW plant/ Connection method is made via RDP.
+                'Else get connection list from WW List
+                Dim Item As ListViewItem
+                Dim Users As String
+                Dim Machine As String
+                Dim RDType As String
+                RDP.WW = ds3.Tables("ConnectionList").Rows(0).Item("WW Plant")
+                If RDP.WW = False Then
+                    For i = 1 To ds3.Tables("ConnectionList").Rows(0).Item("ROC Able PC")
+                        Select Case RegexString(ds3.Tables("ConnectionList").Rows(0).Item("PC" + i.ToString()), 2)
+                            Case 5900
+                                RDType = "VNC"
+                            Case Else
+                                RDType = "RDP"
+                        End Select
+                        Users = ds3.Tables("ConnectionList").Rows(0).Item("OS Type") & i.ToString
+                        Machine = RegexString(ds3.Tables("ConnectionList").Rows(0).Item("PC" + i.ToString()), 0)
+                        Item = New ListViewItem(New String() {Users, Machine, RDType}, -1)
+                        Me.Connectionlist_ListView.Items.AddRange(New ListViewItem() {Item})
+                    Next
+                Else
+                    'if wonderware hmi check wwlist 
+                    Call SQLGetConnectionList(3, 3, True, ds3, "WWConnections")
+                    RDType = "RDP"
+                    For i = 1 To ds3.Tables("WWConnections").Rows.Count
+                        Users = RegexString(ds3.Tables("WWConnections").Rows(i - 1).Item("UN:PW"), 0)
+                        Machine = ds3.Tables("WWConnections").Rows(i - 1).Item("Computer Name")
+                        Item = New ListViewItem(New String() {Users, Machine, RDType}, -1)
+                        Me.Connectionlist_ListView.Items.AddRange(New ListViewItem() {Item})
+                    Next
+                End If
+
+                'Check network status through pinging IP address
+                NetworkCode_TextBox.Text = ds3.Tables("ConnectionList").Rows(0).Item("Network ID").ToString()
+                Connection_Button.Enabled = False
+                CheckNetwork_Button.Enabled = True
+                Gateway_Button.Enabled = True
+                Call RouterPing(ds3.Tables("ConnectionList").Rows(0).Item("Gateway IP"))
+            End If
+        End If
+
+        If IsNothing(PlantName_ComboBox.SelectedValue) = False And StationUser = False Then
+            If PlantName_ComboBox.SelectedValue.ToString <> "[System.Data.DataRowView]" And PlantName_ComboBox.SelectedValue.ToString <> "System.Data.DataRowView" Then
+                'After recording new Combo Value, clear connection list followed by recreating new list
+                ComboSel(3) = PlantName_ComboBox.SelectedValue.ToString()
+                'Clease old database 
+                ds3.Clear()
+                'Get new database
+                Call SQLGetConnectionList(4, 4, False, ds3, "ConnectionList")
+                'Else get connection list from WW List
+                RDP.WW = False
+
+                'If hmi is not wonderware then implement rdp list
+                RDP.PN = ComboSel(3) & "_ViewOnly"
+                Dim UNPW As String = ds3.Tables("ConnectionList").Rows(0).Item("ViewPC UN:PW")
+                RDP.UN = RegexString(UNPW, 0)
+                RDP.PW = RegexString(UNPW, 2)
+                RDP.IP = ds3.Tables("ConnectionList").Rows(0).Item("ViewPC")
+                RDP.Res = ds3.Tables("ConnectionList").Rows(0).Item("Resolution")
+                RDP.Ecv = False
+
+                'Check network status through pinging IP address
+                Dim TemIP = ds3.Tables("ConnectionList").Rows(0).Item("ViewPC")
+                NetworkCode_TextBox.Text = ds3.Tables("ConnectionList").Rows(0).Item("Network ID")
+                Connection_Button.Enabled = False
+                CheckNetwork_Button.Enabled = True
+                Call RouterPing(Mid(TemIP, 1, InStr(TemIP, ":", CompareMethod.Text) - 1))
+
+            End If
+        End If
+
+
+    End Sub
+    Private Sub Connectionlist_ListView_LostFocus(sender As Object, e As EventArgs) Handles Connectionlist_ListView.LostFocus
+        If Connectionlist_ListView.Items.Count > 0 Then
+            If RDP.WW = False Then
+                RDP.PN = ComboSel(3) & "_" & Connectionlist_ListView.FocusedItem.Text
+                Dim UNPW As String = ds3.Tables("ConnectionList").Rows(0).Item("PC" & (Connectionlist_ListView.FocusedItem.Index + 1).ToString & " UN:PW")
+                RDP.UN = RegexString(UNPW, 0)
+                RDP.PW = RegexString(UNPW, 2)
+                RDP.IP = ds3.Tables("ConnectionList").Rows(0).Item("PC" & (Connectionlist_ListView.FocusedItem.Index + 1).ToString)
+                RDP.Res = ds3.Tables("ConnectionList").Rows(0).Item("Resolution")
+                'For Ecovar plants, allow window to be pressed in window mode
+                'Else Disable window button
+                If ds3.Tables("ConnectionList").Rows(0).Item("Plant Type") = "ECOVAR" Then
+                    RDP.Ecv = True
+                Else
+                    RDP.Ecv = False
+                End If
+                ConnectionSel = True
+            Else
+                RDP.PN = ComboSel(3) & "_" & Connectionlist_ListView.FocusedItem.Text
+                Dim UNPW As String = ds3.Tables("WWConnections").Rows(Connectionlist_ListView.FocusedItem.Index).Item("UN:PW")
+                RDP.UN = RegexString(UNPW, 0)
+                RDP.PW = RegexString(UNPW, 2)
+                RDP.IP = ds3.Tables("WWConnections").Rows(Connectionlist_ListView.FocusedItem.Index).Item("Computer Name")
+                RDP.Res = ds3.Tables("WWConnections").Rows(0).Item("Resolution")
+                'For Ecovar plants, allow window to be pressed in window mode
+                'Else Disable window button
+                RDP.Ecv = False
+                ConnectionSel = True
+            End If
+        End If
+    End Sub
+    Private Sub Connection_Button_Click(sender As Object, e As EventArgs) Handles Connection_Button.Click
+        'If item is selected then create connection and connect
+        Try
+            If StationUser = False Then
+                Shell(RDPCreate(RDP.PN, RDP.UN, RDP.PW, RDP.IP, RDP.Res, RDP.WW, RDP.Ecv), AppWinStyle.NormalFocus)
+            Else
+                If ConnectionSel = True Then
+                    If Connectionlist_ListView.FocusedItem.Selected = True Then
+                        Shell(RDPCreate(RDP.PN, RDP.UN, RDP.PW, RDP.IP, RDP.Res, RDP.WW, RDP.Ecv), AppWinStyle.NormalFocus)
+                    Else
+                        MsgBox("Please Select a Connections in Connection List")
+                    End If
+                Else
+                    MsgBox("Please Select a Connections in Connection List")
+                End If
+            End If
+        Catch ex As Exception
+            MsgBox("Unexpected Error", MsgBoxStyle.Exclamation, "Connection Error")
+        End Try
+    End Sub
+    Private Sub CheckNetwork_Button_Click(sender As Object, e As EventArgs) Handles CheckNetwork_Button.Click
+        'Check network
+        Call RouterPing(ds3.Tables("ConnectionList").Rows(0).Item("Gateway IP"))
+    End Sub
+
+    Private Sub Gateway_Button_Click(sender As Object, e As EventArgs) Handles Gateway_Button.Click
+        Dim Logfile As String = "C:\"
+        Try
+            Dim ip As String = ds3.Tables("ConnectionList").Rows(0).Item("Gateway IP").ToString()
+            Dim Arg As String = "/k ping -a " + ip + " -n 20"
+            Dim Arg2 As String = "Tracert " + ip
+            Logfile = ShellCMD(Arg, Arg2, "Gateway", ComboSel(3))
+        Catch ex As Exception
+            MsgBox("Please Select a Site in Connection List")
+        Finally
+            Process.Start(Logfile)
+        End Try
+    End Sub
+
+    Private Sub Machine_Button_Click(sender As Object, e As EventArgs) Handles Machine_Button.Click
+        Dim Machine As String
+        Dim Users As String
+        Dim logfile As String = "C:\"
+        Dim Arg As String
+        Dim Arg2 As String
+        Try
+            If IsNothing(PlantName_ComboBox.SelectedValue) = False And StationUser = True Then
+                If PlantName_ComboBox.SelectedValue.ToString <> "[System.Data.DataRowView]" And PlantName_ComboBox.SelectedValue.ToString <> "System.Data.DataRowView" Then
+                    If RDP.WW = False Then
+                        For i = 1 To ds3.Tables("ConnectionList").Rows(0).Item("ROC Able PC")
+                            Users = ds3.Tables("ConnectionList").Rows(0).Item("OS Type") & i.ToString
+                            Machine = RegexString(ds3.Tables("ConnectionList").Rows(0).Item("PC" + i.ToString()), 0)
+                            Arg = "/k ping -a " + Machine + " -n 20"
+                            Arg2 = "Tracert " + Machine
+                            logfile = ShellCMD(Arg, Arg2, Users, ComboSel(3))
+                        Next
+                    Else
+                        'Ping Station Machine
+                        ds3.Clear()
+                        Call SQLGetConnectionList(3, 3, True, ds3, "WWConnections")
+                        For i = 1 To ds3.Tables("WWConnections").Rows.Count
+                            Users = RegexString(ds3.Tables("WWConnections").Rows(i - 1).Item("UN:PW"), 0)
+                            Machine = ds3.Tables("WWConnections").Rows(i - 1).Item("Computer Name")
+                            Arg = "/k ping -a " + Machine + " -n 20"
+                            Arg2 = "Tracert " + Machine
+                            logfile = ShellCMD(Arg, Arg2, Users, ComboSel(3))
+                        Next
+                        'Ping OS Machine
+                        ds3.Clear()
+                        Call SQLGetConnectionList(4, 4, False, ds3, "ConnectionList")
+                        For i = 1 To ds3.Tables("ConnectionList").Rows(0).Item("OS Able PC")
+                            Users = "OS" & i.ToString
+                            Machine = ds3.Tables("ConnectionList").Rows(0).Item("Server" + i.ToString())
+                            Arg = "/k ping -a " + Machine + " -n 20"
+                            Arg2 = "Tracert " + Machine
+                            logfile = ShellCMD(Arg, Arg2, Users, ComboSel(3))
+                        Next
+                    End If
+                End If
+            End If
+            If IsNothing(PlantName_ComboBox.SelectedValue) = False And StationUser = False Then
+                If PlantName_ComboBox.SelectedValue.ToString <> "[System.Data.DataRowView]" And PlantName_ComboBox.SelectedValue.ToString <> "System.Data.DataRowView" Then
+                    ds3.Clear()
+                    Call SQLGetConnectionList(4, 4, False, ds3, "ConnectionList")
+                    Machine = RegexString(ds3.Tables("ConnectionList").Rows(0).Item("ViewPC"), 0)
+                    Arg = "/k ping -a " + Machine + " -n 20"
+                    Arg2 = "Tracert " + Machine
+                    logfile = ShellCMD(Arg, Arg2, "ViewOnly", ComboSel(3))
+                End If
+            End If
+        Catch ex As Exception
+            MsgBox("Please Select a Site in Connection List")
+        Finally
+            Process.Start(logfile)
+        End Try
+    End Sub
+
+    Private Sub ATR_Button_Click(sender As Object, e As EventArgs) Handles ATR_Button.Click
+        ComboSel(4) = ATR_ComboBox.SelectedValue.ToString()
+        ds5.Clear()
+        Call SQLGetATRList(5, 5, True, ds5)
+        Dim Main = ds5.Tables("ATRList").Rows(0).Item("MainPage")
+        Dim Subx = ds5.Tables("ATRList").Rows(0).Item("SubPage")
+        Process.Start("iexplore", Main + "\" + Subx)
+    End Sub
+
+    Private Sub View_Button_Click(sender As Object, e As EventArgs) Handles View_Button.Click
+        StationUser = False
+        Connectionlist_ListView.Enabled = False
+        Station_ComboBox.Enabled = False
+        ds1.Clear()
+        Call SQLGetDSList(1, 2, False, ds1)
+        PlantType_ComboBox.DataSource = ds1.Tables(TablesNames(1))
+        PlantType_ComboBox.ValueMember = "Plant Type"
+        Station_ComboBox.DataSource = ds1.Tables(TablesNames(2))
+        Station_ComboBox.ValueMember = "Decription"
+        ds2.Clear()
+        'PlantName_ComboBox.Items.Clear()
+        Connectionlist_ListView.Items.Clear()
+
+    End Sub
+
+    Private Sub DB_Button_Click(sender As Object, e As EventArgs) Handles DB_Button.Click
+
+        DBloc = "\\TLGMY8000AS107\DB\Backup\Database2.mdb;Jet OLEDB:Database Password=Linde2014"
+
+        ds1.Clear()
+        Call SQLGetDSList(1, 2, False, ds1)
+        PlantType_ComboBox.DataSource = ds1.Tables(TablesNames(1))
+        PlantType_ComboBox.ValueMember = "Plant Type"
+        Station_ComboBox.DataSource = ds1.Tables(TablesNames(2))
+        Station_ComboBox.ValueMember = "Decription"
+        ds2.Clear()
+        'PlantName_ComboBox.Items.Clear()
+        Connectionlist_ListView.Items.Clear()
+        DB_Label.Text = Regex.Split(DBloc, "(;)")(0)
+    End Sub
+
+    Private Sub RDPLauncher_Form_Load(sender As Object, e As EventArgs) Handles Me.Load
+        'Check RSE DR or Hicom ROC? If none of above, then default
+        Try
+            Dim m_CN As String = My.Computer.Name
+            If m_CN.Length >= 3 Then
+                If m_CN.Substring(0, 3) = "TLG" Then
+                    Select Case m_CN.Substring(0, 9)
+                        Case "TLGMY8000", "TLGMY1168"
+                            'Case Hicom"
+                            DBloc = "\\TLGMY8000AS107\DB\Database2.mdb;Jet OLEDB:Database Password=Linde2014"
+                        Case "TLGMY8001", "TLGMY1145"
+                            'Case DR
+                            DBloc = "\\TLGMY8001AS107\DB\Database2.mdb;Jet OLEDB:Database Password=Linde2014"
+                    End Select
+                End If
+            End If
+
+            'Check if its part of station user group, else assigned as view only        
+            Dim Entry As DirectoryEntry = New DirectoryEntry("LDAP://10.199.116.225/dc=ap,dc=ltn")
+            Dim Searcher As DirectorySearcher = New DirectorySearcher(Entry)
+            Searcher.SearchScope = SearchScope.Subtree
+            Searcher.Filter = "(&(objectcategory=user)(SAMAccountName=" + Environment.UserName + "))"
+            Dim res As SearchResult = Searcher.FindOne
+            For i = 0 To res.Properties("MemberOf").Count - 1
+                Dim MemberOf As String = Regex.Split(res.Properties("MemberOf")(i).ToString, "(=)|(,)")(2)
+                Select Case True
+                    Case MemberOf.Contains("GMY800000Station")
+                        StationUser = True
+                        Connectionlist_ListView.Enabled = True
+                        Station_ComboBox.Enabled = True
+                        Exit For
+                    Case MemberOf.Contains("GMY800100Station")
+                        StationUser = True
+                        Connectionlist_ListView.Enabled = True
+                        Station_ComboBox.Enabled = True
+                        Exit For
+                    Case MemberOf.Contains("GMY000000LTNAUsers")
+                        StationUser = True
+                        Connectionlist_ListView.Enabled = True
+                        Station_ComboBox.Enabled = True
+                        Support_Group.Visible = False 'True to enable on the go mode
+                        ' Me.Width = 689
+                        'Me.Height = 374
+                        Exit For
+                    Case MemberOf.Contains("GMY000000IPC")
+                        StationUser = True
+                        Connectionlist_ListView.Enabled = True
+                        Station_ComboBox.Enabled = True
+                        Support_Group.Visible = False 'True to enable on the go mode
+                        'Me.Width = 689
+                        ' Me.Height = 374
+                        Exit For
+                    Case Else
+                        StationUser = False
+                        Connectionlist_ListView.Enabled = False
+                        Station_ComboBox.Enabled = False
+                End Select
+            Next
+
+            'Get PlantType and Defaultstation List Everytime the windows is being activated
+            ds1.Clear()
+            Call SQLGetDSList(1, 2, False, ds1)
+            PlantType_ComboBox.DataSource = ds1.Tables(TablesNames(1))
+            PlantType_ComboBox.ValueMember = "Plant Type"
+            Station_ComboBox.DataSource = ds1.Tables(TablesNames(2))
+            Station_ComboBox.ValueMember = "Decription"
+
+            ds5.Clear()
+            Call SQLGetATRList(5, 5, False, ds5)
+            ATR_ComboBox.DataSource = ds5.Tables(TablesNames(5))
+            ATR_ComboBox.ValueMember = "Site"
+            ATR_ComboBox.SelectedValue = -1
+            DB_Label.Text = Regex.Split(DBloc, "(;)")(0)
+
+        Catch ex As DirectoryServicesCOMException
+            MsgBox("Unable to communicate with LDAP Server, Check the server Availability." + Environment.NewLine + "" + ex.Message, "LDAP Error", MsgBoxStyle.Exclamation)
+        Catch ex As Exception
+            MsgBox("Unexpected Error." + Environment.NewLine + "" + ex.Message, MsgBoxStyle.Critical)
+        End Try
+    End Sub
+
+    Private Sub Refresh_Button_Click(sender As Object, e As EventArgs) Handles Refresh_Button.Click
+        Try
+            Dim m_CN As String = My.Computer.Name
+            If m_CN.Length >= 3 Then
+                If m_CN.Substring(0, 3) = "TLG" Then
+                    Select Case m_CN.Substring(0, 9)
+                        Case "TLGMY8000", "TLGMY1168"
+                            'Case Hicom"
+                            DBloc = "\\TLGMY8000AS107\DB\Database2.mdb;Jet OLEDB:Database Password=Linde2014"
+                        Case "TLGMY8001", "TLGMY1145"
+                            'Case DR
+                            DBloc = "\\TLGMY8001AS107\DB\Database2.mdb;Jet OLEDB:Database Password=Linde2014"
+                    End Select
+                End If
+            End If
+
+            'Check if its part of station user group, else assigned as view only        
+            Dim Entry As DirectoryEntry = New DirectoryEntry("LDAP://10.199.116.225/dc=ap,dc=ltn")
+            Dim Searcher As DirectorySearcher = New DirectorySearcher(Entry)
+            Searcher.SearchScope = SearchScope.Subtree
+            Searcher.Filter = "(&(objectcategory=user)(SAMAccountName=" + Environment.UserName + "))"
+            Dim res As SearchResult = Searcher.FindOne
+            For i = 0 To res.Properties("MemberOf").Count - 1
+                Dim MemberOf As String = Regex.Split(res.Properties("MemberOf")(i).ToString, "(=)|(,)")(2)
+                Select Case True
+                    Case MemberOf.Contains("GMY800000Station")
+                        StationUser = True
+                        Connectionlist_ListView.Enabled = True
+                        Station_ComboBox.Enabled = True
+                        Exit For
+                    Case MemberOf.Contains("GMY800100Station")
+                        StationUser = True
+                        Connectionlist_ListView.Enabled = True
+                        Station_ComboBox.Enabled = True
+                        Exit For
+                    Case MemberOf.Contains("GMY000000LTNAUsers")
+                        StationUser = True
+                        Connectionlist_ListView.Enabled = True
+                        Station_ComboBox.Enabled = True
+                        Support_Group.Visible = False 'True to enable on the go mode
+                        'Me.Width = 689
+                        'Me.Height = 374
+                        Exit For
+                    Case MemberOf.Contains("GMY000000IPC")
+                        StationUser = True
+                        Connectionlist_ListView.Enabled = True
+                        Station_ComboBox.Enabled = True
+                        Support_Group.Visible = False 'True to enable on the go mode
+                        'Me.Width = 689
+                        'Me.Height = 374
+                        Exit For
+                    Case Else
+                        StationUser = False
+                        Connectionlist_ListView.Enabled = False
+                        Station_ComboBox.Enabled = False
+                End Select
+            Next
+
+            'Get PlantType and Defaultstation List Everytime the windows is being activated
+            ds1.Clear()
+            Call SQLGetDSList(1, 2, False, ds1)
+            PlantType_ComboBox.DataSource = ds1.Tables(TablesNames(1))
+            PlantType_ComboBox.ValueMember = "Plant Type"
+            Station_ComboBox.DataSource = ds1.Tables(TablesNames(2))
+            Station_ComboBox.ValueMember = "Decription"
+
+            ds5.Clear()
+            Call SQLGetATRList(5, 5, False, ds5)
+            ATR_ComboBox.DataSource = ds5.Tables(TablesNames(5))
+            ATR_ComboBox.ValueMember = "Site"
+            ATR_ComboBox.SelectedValue = -1
+            DB_Label.Text = Regex.Split(DBloc, "(;)")(0)
+
+        Catch ex As DirectoryServicesCOMException
+            MsgBox("Unable to communicate with LDAP Server, Check the server Availability." + Environment.NewLine + "" + ex.Message, "LDAP Error", MsgBoxStyle.Exclamation)
+        Catch ex As Exception
+            MsgBox("Unexpected Error." + Environment.NewLine + "" + ex.Message, MsgBoxStyle.Critical)
+        End Try
+    End Sub
+
+    Private Sub Title4_Label_Click(sender As Object, e As EventArgs) Handles Title4_Label.Click
+
+    End Sub
+
+    Private Sub PlantName_ComboBox_SelectedIndexChanged(sender As Object, e As EventArgs) Handles PlantName_ComboBox.SelectedIndexChanged
+
+    End Sub
+
+    Private Sub Connectionlist_ListView_SelectedIndexChanged(sender As Object, e As EventArgs) Handles Connectionlist_ListView.SelectedIndexChanged
+
+    End Sub
+
+    Private Sub NetworkCode_TextBox_TextChanged(sender As Object, e As EventArgs) Handles NetworkCode_TextBox.TextChanged
+
+    End Sub
+End Class
